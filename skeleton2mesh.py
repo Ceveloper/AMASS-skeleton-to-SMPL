@@ -167,8 +167,8 @@ if __name__ == "__main__":
                             help='Overwrite existing files (default: False)')
         parser.add_argument('--save_obs_smpl_data', action='store_true', default=True,
                             help='Save observation SMPL data (default: True)')
-        parser.add_argument('--optimize_fut_with_obs_init', action='store_true', default=True,
-                            help='Optimize future with observation initialization (default: True)')
+        parser.add_argument('--optimize_fut_with_obs_init', action='store_true', default=False,
+                            help='Optimize future with observation initialization (default: False)')
         parser.add_argument('--if_smooth_head_motion', action='store_true', default=True,
                             help='Smooth head motion (default: True)')
         

@@ -93,7 +93,7 @@ def get_mesh_shadow(mesh, offset=[0, 0, 0], plane_normal=(0, 0, 1), direction=[0
     return shadow
 
 
-def create_visual(mesh_files, color='coral', dest_name="", x=0, y=0, z=0, type='mesh', mesh_lighting='plastic'):
+def create_visual(mesh_files, color='coral', dest_name="", x=0, y=0, z=0, type='mesh', mesh_lighting='plastic', shadow=False):
     meshes, scales = [], []
     bg_col = [255, 255, 255]
     plotter = Plotter(bg=[255, 255, 255], offscreen=True)
@@ -103,9 +103,12 @@ def create_visual(mesh_files, color='coral', dest_name="", x=0, y=0, z=0, type='
         mesh, scale = get_mesh(file, color=color, rotation=[
                                x, y, z], mesh_lighting=mesh_lighting, scale=0.6)
         plotter.clear()
-
-        plotter.show(mesh, __doc__, interactive=False,
-                     camera=cam, resetcam=True, zoom=2)
+        if shadow:
+            shadow = get_mesh_shadow(mesh)
+            plotter.show(mesh, shadow, __doc__, interactive=False, camera=cam, resetcam=True, zoom=2)
+        else:
+            plotter.show(mesh, __doc__, interactive=False,
+                        camera=cam, resetcam=True, zoom=2)
         frame_path = file[:-4] + ".png"
         frame_files.append(frame_path)
 
@@ -125,7 +128,6 @@ def create_transparent_gif(mesh_files, dest_name):
     subprocess.run(["ffmpeg", "-framerate", "60", "-i", frames_folder+"frame%03d.png", "-i", frames_folder +
                    "palette.png", "-lavfi", "paletteuse=alpha_threshold=128", "-gifflags", "-offsetting", dest_name + ".gif"])
 
-ffmpeg -framerate 60 -i frame%03d.png -i palette.png -lavfi paletteuse=alpha_threshold=128 -gifflags -offsetting skeleton.gif
 def sort_list(l):
     try:
         return list(sorted(l, key=lambda x: int(re.search(r'\d+(?=\.)', x).group())))
@@ -133,11 +135,11 @@ def sort_list(l):
         return sorted(l)
 
 
-def main(parent_folder, dest_dir, if_concat_obs_in_gif, x_rot, y_rot, z_rot, redo):
+def main(parent_folder, dest_dir, if_concat_obs_in_gif, x_rot, y_rot, z_rot, redo, shadow=True):
     file_type = '.obj'  # 'mesh.ply'
 
     if dest_dir is None:
-        dest_dir = os.path.join(parent_folder, 'shadow_gif_60fps')
+        dest_dir = os.path.join(parent_folder, 'gif_60fps')
     os.makedirs(dest_dir, exist_ok=True)
 
     meshfolders = sorted([f for f in os.listdir(parent_folder) if os.path.isdir(
@@ -156,10 +158,10 @@ def main(parent_folder, dest_dir, if_concat_obs_in_gif, x_rot, y_rot, z_rot, red
 
         if 'obs' in f:
             create_visual(mesh_files, _green, dest_name, x_rot, y_rot, z_rot, type='mesh',
-                          mesh_lighting='plastic')
+                          mesh_lighting='plastic', shadow=shadow)
         else:
             create_visual(mesh_files, _dark_blue, dest_name, x_rot, y_rot, z_rot,
-                          type='mesh', mesh_lighting='plastic')
+                          type='mesh', mesh_lighting='plastic', shadow=shadow)
 
     if if_concat_obs_in_gif:
         dest_dir = dest_dir +  '_concat_obs'
@@ -232,7 +234,9 @@ if __name__ == "__main__":
                             help='Overwrite existing files (default: False)')
     parser.add_argument('--if_concat_obs_in_gif', action='store_true',
                         help="If true, concatenates observation frames to the beginning of each prediction gif.")
-    parser.add_argument('--x_rot', type=int, default=0,
+    parser.add_argument('--shadow', action='store_true', default=False,
+                        help="If true, adds shadow to the mesh visualization.")
+    parser.add_argument('--x_rot', type=float, default=0,
                         help="Rotation around x-axis.")
     parser.add_argument('--y_rot', type=int, default=0,
                         help="Rotation around y-axis.")
