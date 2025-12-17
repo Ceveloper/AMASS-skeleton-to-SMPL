@@ -1,0 +1,24 @@
+name: skeleton2mesh
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.10
+  - numpy
+  - scipy
+  - tqdm
+  - pip
+
+  # PyTorch + CUDA
+  - pytorch=2.5.1=py3.10_cuda12.1_cudnn9.1.0_0
+
+  # Visualization & IO
+  - opencv
+  - vedo
+  - imageio
+  - pillow
+
+  - pip:
+    - trimesh
+    - smplx==0.1.28
