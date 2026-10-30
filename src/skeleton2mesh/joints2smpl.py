@@ -134,7 +134,7 @@ def smooth_head_motion(rot_motions, num_frames):
     for param_idx in range(45, 49):
         thetas[..., param_idx] = gaussian_filter1d(
             thetas[..., param_idx], sigma=sigma, axis=-1)
-    thetas = torch.from_numpy(thetas).reshape(-1, 24, 3).cuda()
+    thetas = torch.from_numpy(thetas).reshape(-1, 24, 3).to(rot_motions.device)
     rot_motions = thetas
     return rot_motions
 
