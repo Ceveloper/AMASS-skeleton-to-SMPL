@@ -74,7 +74,9 @@ class joints2smpl:
                 [0.0, 0.0, 0.0]).unsqueeze(0).to(self.device)
         else:
             pred_betas = init_params["betas"]
-            pred_pose = init_params["pose"]
+            if pred_betas.dim() == 2 and pred_betas.shape[0] == 1 and batch_size > 1:
+                pred_betas = pred_betas.expand(batch_size, -1)
+            pred_pose = init_params["pose"].reshape(batch_size, 72)
             pred_cam_t = init_params["cam"]
 
         if self.joint_category == "AMASS":
@@ -117,21 +119,24 @@ class joints2smpl:
         # thetas = thetas.clone().detach()
 
         return new_opt_pose, {
-            "pose": new_opt_joints[..., :24, :].clone().detach(),
+            "pose": new_opt_pose.clone().detach(),
+            "joints": new_opt_joints[..., :24, :].clone().detach(),
             "betas": new_opt_betas.clone().detach(),
             "cam": new_opt_cam_t.clone().detach(),
         }
 
 
-def smooth_head_motion(rot_motions, num_frames):
+def smooth_head_motion(rot_motions, num_frames=None):
+    if num_frames is None:
+        num_frames = rot_motions.shape[1] if rot_motions.dim() == 4 else rot_motions.shape[0]
 
     thetas = rot_motions
-    thetas = thetas.view(-1, num_frames, 72).cpu().detach().numpy()
+    thetas = thetas.reshape(-1, num_frames, 72).cpu().detach().numpy()
     sigma = 20.0
-    for param_idx in range(36, 40):
+    for param_idx in range(36, 39):
         thetas[..., param_idx] = gaussian_filter1d(
             thetas[..., param_idx], sigma=sigma, axis=-1)
-    for param_idx in range(45, 49):
+    for param_idx in range(45, 48):
         thetas[..., param_idx] = gaussian_filter1d(
             thetas[..., param_idx], sigma=sigma, axis=-1)
     thetas = torch.from_numpy(thetas).reshape(-1, 24, 3).to(rot_motions.device)

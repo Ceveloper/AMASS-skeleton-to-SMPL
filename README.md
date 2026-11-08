@@ -14,7 +14,7 @@ If this repository helps your research, please star it and cite our work.
 
 - **Input:** AMASS skeleton sequences (`F × 22 × 3`, xyz in `m|cm|mm`). One file must be the observation (filename contains `obs`); the rest are predictions.
 - **Output:** Per-frame SMPL meshes as `.obj` files saved in a corresponding `<stem>_obj` folder, plus cached SMPL parameters for the observation (`obs_as_optimized_smpl.npz`). A script to visualize mesh sequences as transparent GIFs is also provided.
-- **Method:** Fits a SMPL model to the observation sequence and reuses its parameters to initialize the fits for prediction sequences (batched over time for speed). The root translation is set to zero, as it is typically ignored in HMP.
+- **Method:** Fits a SMPL model to the observation sequence and reuses its shape, camera, and last-frame pose to initialize the prediction sequences. With `--sequential_init`, future frames are fit sequentially (`t` initialized from `t-1`, batched across predictions) for temporal coherence; otherwise, all frames are fit in parallel (batched over time for speed). The root translation is set to zero, as it is typically ignored in HMP.
 - **Note:** The generated meshes are intended for visualization, not for metric evaluation, as the fitting process can slightly alter the skeleton geometry.
 - **Beyond HMP:** You can adapt the code to convert any AMASS motion sequence to SMPL by treating each sequence as an "observation".
 
@@ -64,14 +64,15 @@ Convert skeletons to meshes using the following command. The script will automat
 python skeleton2mesh.py \
   --directory ./example_data/SkeletonDiffusion_example \
   --device cuda \
-  --num_smplify_iters 50
+  --num_smplify_iters 50 \
+  --sequential_init
 ```
 
 ### Useful Flags:
 - `--unit {m,cm,mm}`: Specify the units of the input joints (default: `m`).
 - `--redo`: Overwrite existing mesh folders.
 - `--save_obs_smpl_data`: Cache the observation's SMPL parameters (default: on).
-- `--optimize_fut_with_obs_init`: Initialize future predictions from the observation's fit (default: off). It can lead to speed up and enhanced smoothness if the motion is not too dynamic.
+- `--optimize_fut_with_obs_init`: Initialize all future predictions in parallel from the observation's fit (default: off). It can lead to speed up and enhanced smoothness if the motion is not too dynamic. Cannot be paired with `--sequential_init`.
 - `--if_smooth_head_motion`: Apply light smoothing to head motion, as the AMASS skeleton lacks head keypoints (default: on).
 
 Outputs are written to `<file_stem>_obj/frameXXX.obj` for each input `.npy` file. The observation's SMPL parameters are cached as `obs_as_optimized_smpl.npz` in the same directory.

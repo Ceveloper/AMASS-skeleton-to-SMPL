@@ -9,7 +9,7 @@ from src.datasets import get_skeleton_info
 from src.mesh.io import save_obj, to_mesh
 from src.skeleton.io import load_skeleton, remove_hip_motion
 from src.skeleton.conversions import convert2humanml
-from src.skeleton2mesh.joints2smpl import Skeleton2Obj
+from src.skeleton2mesh.joints2smpl import Skeleton2Obj, smooth_head_motion
 from src.skeleton2mesh.smpl2mesh import SMPL2Mesh
 
 
@@ -89,23 +89,24 @@ def main(config: dict):
 
     output_file = Path(config["directory"]) / "obs_as_optimized_smpl.npz"
     
-    if output_file.exists():
+    if output_file.exists() and not config.get("redo", False):
         # Load the dictionary of arrays from the npz file
         loaded_data = np.load(output_file, allow_pickle=True)
         rot_motions_obs = torch.from_numpy(loaded_data["rot_motions_obs"]).to(device).float()
         smpl_dict_obs = {key: torch.from_numpy(val).to(device).float() for key, val in loaded_data["smpl_dict_obs"].item().items()}
         print("Loaded observation data from npz file.")
         humanml_motion_obs = get_preprocessed_motion(obs_file, skeleton, config, device)
-    if not output_file.exists() and config.get("save_obs_smpl_data", True):
+    else:
         humanml_motion_obs = get_preprocessed_motion(obs_file, skeleton, config, device)
         rot_motions_obs, smpl_dict_obs = skeleton2obj.convert_motion_2smpl(humanml_motion_obs, hmp=False, fix_betas=False, if_smooth_head_motion=config.get("if_smooth_head_motion", True), num_frames=len(humanml_motion_obs))
-        # Save the dictionary of arrays to a file
-        output_dict = {
-            "rot_motions_obs": rot_motions_obs.cpu().numpy(),
-            "smpl_dict_obs": {key: value.cpu().numpy() for key, value in smpl_dict_obs.items()},
-        }
-        np.savez(output_file, **output_dict)
-        print(f"Saved observation data to [{output_file}]")
+        if config.get("save_obs_smpl_data", True):
+            # Save the dictionary of arrays to a file
+            output_dict = {
+                "rot_motions_obs": rot_motions_obs.cpu().numpy(),
+                "smpl_dict_obs": {key: value.cpu().numpy() for key, value in smpl_dict_obs.items()},
+            }
+            np.savez(output_file, **output_dict)
+            print(f"Saved observation data to [{output_file}]")
 
     if not config.get("redo", False):
         # check if all the files already exist
@@ -126,23 +127,65 @@ def main(config: dict):
     if len(pred_motions) == 0:
         print("All prediction files have been converted already. Exiting.")
         return
-    num_frames = pred_motions.shape[-3]
-    pred_motions = pred_motions.view(-1, 22, 3).to(device).float()
+    num_pred_files = len(pred_files)
+    num_frames = pred_motions.shape[1]
 
-    init_params = {}
-    if config.get('optimize_fut_with_obs_init', True):
+    if config.get("sequential_init", False):
+        print(f"Running sequential frame-by-frame initialization across {num_frames} frames for {num_pred_files} sequences...")
 
-        init_params["betas"] = smpl_dict_obs["betas"][-1].unsqueeze(0).expand(pred_motions.shape[0], -1).to(device)
-        init_params["pose"] = smpl_dict_obs["pose"][-1].unsqueeze(0).expand(pred_motions.shape[0], -1, -1).view(pred_motions.shape[0], -1).to(device)
-        init_params["cam"] = smpl_dict_obs["cam"].to(device)
+        # Frame 0 is initialized from the last frame of the observation
+        obs_pose_last = rot_motions_obs[-1].reshape(1, 72).expand(num_pred_files, -1).clone().to(device).float()
+        obs_betas = smpl_dict_obs["betas"][-1].reshape(1, 10).expand(num_pred_files, -1).clone().to(device).float()
+        obs_cam = smpl_dict_obs["cam"].reshape(-1, 3)[-1:].clone().to(device).float()
 
-        rot_motions, smpl_dict = skeleton2obj.convert_motion_2smpl(pred_motions, hmp=True, init_params=init_params, fix_betas=True, 
-                                                                   if_smooth_head_motion=config.get("if_smooth_head_motion", True), num_frames=num_frames)
+        all_opt_rot = []
+        prev_pose = obs_pose_last
+
+        for t in tqdm(range(num_frames), desc="Sequential init frames"):
+            curr_joints = pred_motions[:, t, :, :].to(device).float()  # (B, 22, 3)
+            init_params_t = {
+                "betas": obs_betas,
+                "pose": prev_pose,
+                "cam": obs_cam,
+            }
+
+            opt_rot_t, _ = skeleton2obj.convert_motion_2smpl(
+                curr_joints,
+                hmp=True,
+                init_params=init_params_t,
+                fix_betas=True,
+                if_smooth_head_motion=False,
+            )
+            opt_pose_72 = opt_rot_t.view(num_pred_files, 72)
+            prev_pose = opt_pose_72.clone()
+            all_opt_rot.append(opt_rot_t.view(num_pred_files, 24, 3))
+
+        # Stack over time: (B, T, 24, 3)
+        rot_motions = torch.stack(all_opt_rot, dim=1)
+        if config.get("if_smooth_head_motion", True):
+            rot_motions = smooth_head_motion(rot_motions, num_frames=num_frames)
+        else:
+            rot_motions = rot_motions.reshape(-1, 24, 3)
+
+        pred_motions_flat = pred_motions.view(-1, 22, 3)
     else:
-        rot_motions, smpl_dict = skeleton2obj.convert_motion_2smpl(pred_motions, hmp=False, if_smooth_head_motion=config.get("if_smooth_head_motion", True), num_frames=num_frames)
+        pred_motions_flat = pred_motions.view(-1, 22, 3).to(device).float()
+        init_params = {}
+        if config.get('optimize_fut_with_obs_init', True):
+            init_params["betas"] = smpl_dict_obs["betas"][-1].unsqueeze(0).expand(pred_motions_flat.shape[0], -1).to(device)
+            init_params["pose"] = rot_motions_obs[-1].reshape(1, 72).expand(pred_motions_flat.shape[0], -1).to(device)
+            init_params["cam"] = smpl_dict_obs["cam"].to(device)
 
-    
-    vertices, faces = smpl2mesh.convert_smpl_to_mesh(rot_motions, pred_motions)
+            rot_motions, smpl_dict = skeleton2obj.convert_motion_2smpl(
+                pred_motions_flat, hmp=True, init_params=init_params, fix_betas=True, 
+                if_smooth_head_motion=config.get("if_smooth_head_motion", True), num_frames=num_frames
+            )
+        else:
+            rot_motions, smpl_dict = skeleton2obj.convert_motion_2smpl(
+                pred_motions_flat, hmp=False, if_smooth_head_motion=config.get("if_smooth_head_motion", True), num_frames=num_frames
+            )
+
+    vertices, faces = smpl2mesh.convert_smpl_to_mesh(rot_motions, pred_motions_flat)
     vertices = vertices.reshape(*vertices.shape[:2], len(pred_files), -1)
     for v, npy_file in zip(np.moveaxis(vertices, 2, 0), pred_files):
         save_mesh(v, faces, npy_file)
@@ -163,12 +206,15 @@ if __name__ == "__main__":
                             help='Device to use for computation (default: cuda)')
         parser.add_argument('--num_smplify_iters', type=int, default=25,
                             help='Number of SMPLify iterations (default: 25 if the skeleton motion does not have strong artifacts. Otherwise up to 150)')
+        init_group = parser.add_mutually_exclusive_group()
+        init_group.add_argument('--sequential_init', action='store_true', default=False,
+                                help='Sequential frame-by-frame initialization from previous frame (default: False)')
+        init_group.add_argument('--optimize_fut_with_obs_init', action='store_true', default=False,
+                                help='Optimize future with observation initialization (default: False)')
         parser.add_argument('--redo', action='store_true', default=False,
                             help='Overwrite existing files (default: False)')
         parser.add_argument('--save_obs_smpl_data', action='store_true', default=True,
                             help='Save observation SMPL data (default: True)')
-        parser.add_argument('--optimize_fut_with_obs_init', action='store_true', default=False,
-                            help='Optimize future with observation initialization (default: False)')
         parser.add_argument('--if_smooth_head_motion', action='store_true', default=True,
                             help='Smooth head motion (default: True)')
         
